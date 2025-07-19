@@ -305,10 +305,6 @@ impl ActorCell {
     pub fn get_id(&self) -> ActorId {
         self.inner.id
     }
-    /// Retrieve the [super::Actor]'s message TypeId
-    pub(crate) fn message_type_id(&self) -> std::any::TypeId {
-        self.inner.message_type_id()
-    }
 
     /// ## Safety
     /// This should only be called if self.type_id() == std::any::TypeId::of::<TMessage>

@@ -139,6 +139,7 @@ impl<TMessage> std::ops::Deref for CheckedActorRef<TMessage> {
     }
 }
 
+/// Indicate actor is died or in the stopping process
 pub struct ActorDied<T>(pub T);
 impl<T> std::fmt::Debug for ActorDied<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -153,6 +154,8 @@ impl<T> std::fmt::Display for ActorDied<T> {
 impl<T> std::error::Error for ActorDied<T> {}
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 
+/// Indicates that the actual actor message type is not the one
+/// expected
 pub struct InvalidTypeId;
 impl std::fmt::Display for InvalidTypeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -164,7 +167,7 @@ impl std::error::Error for InvalidTypeId {}
 impl<TMessage: Message> TryFrom<ActorCell> for CheckedActorRef<TMessage> {
     type Error = InvalidTypeId;
     fn try_from(value: ActorCell) -> Result<Self, Self::Error> {
-        if value.message_type_id() != std::any::TypeId::of::<TMessage>() {
+        if value.is_message_type_of::<TMessage>() != Some(true) {
             return Err(InvalidTypeId);
         }
         Ok(Self {
