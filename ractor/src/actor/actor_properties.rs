@@ -170,6 +170,10 @@ impl ActorProperties {
         self.supervision.send(message).map_err(|e| e.into())
     }
 
+    pub(crate) fn message_type_id(&self) -> std::any::TypeId {
+        self.type_id
+    }
+
     pub(crate) fn send_message<TMessage>(
         &self,
         message: TMessage,
