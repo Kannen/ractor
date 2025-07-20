@@ -415,6 +415,7 @@ mod output_port_subscriber_tests {
         tracing_test::traced_test
     )]
     async fn test_output_port_subscriber() {
+        println!("start subscribers");
         let (number_publisher_ref, number_publisher_handler) =
             Actor::spawn(None, NumberPublisher, ()).await.unwrap();
 
@@ -434,11 +435,17 @@ mod output_port_subscriber_tests {
             NumberPublisherMessage::Subscribe(Box::new(mul_subcriber_ref.clone()))
         )
         .unwrap();
+        println!("subscribers initialized");
+        println!("0 message sents");
 
         cast!(number_publisher_ref, NumberPublisherMessage::Publish(2)).unwrap();
+        println!("1 message sents");
         cast!(number_publisher_ref, NumberPublisherMessage::Publish(3)).unwrap();
+        println!("2 message sents");
 
+        println!("message sents pre sleep");
         crate::concurrency::sleep(Duration::from_millis(50)).await;
+        println!("message sents post sleep");
 
         let plus_result = call_t!(plus_subcriber_ref, PlusSubscriberMessage::Result, 10).unwrap();
         let mul_result = call_t!(mul_subcriber_ref, MulSubscriberMessage::Result, 10).unwrap();
