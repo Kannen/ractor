@@ -31,6 +31,7 @@ impl<T: Message + Clone> OutputMessage for T {}
 /// type to the actor's expected input type. If the actor is dropped or stops, the subscription will
 /// be dropped and if the output port is dropped, then the subscription will also be dropped
 /// automatically.
+#[derive(Clone)]
 pub struct OutputPort<TMsg>
 where
     TMsg: OutputMessage,
@@ -50,7 +51,7 @@ where
 {
     fn default() -> Self {
         Self {
-            inner: inner::OutputPort::default(),
+            inner: inner::OutputPort::new(false),
         }
     }
 }
@@ -66,6 +67,9 @@ where
     /// * `converter` - The converter which will convert the output message type to the
     ///   receiver's input type and return [Some(_)] if the message should be forwarded, [None]
     ///   if the message should be skipped.
+    ///
+    /// If the actor is already subscribed, the subscription will not be
+    /// duplicated but the converter will be changed.
     pub fn subscribe<TReceiverMsg, F>(&self, receiver: ActorRef<TReceiverMsg>, converter: F)
     where
         F: Fn(TMsg) -> Option<TReceiverMsg> + Send + 'static,
@@ -79,6 +83,40 @@ where
     /// * `msg`: The message to send
     pub fn send(&self, msg: TMsg) {
         self.inner.send(msg)
+    }
+    /// Retrive the list of actors ids of actor currently
+    /// subscribed to this output port.
+    ///
+    /// Not that the returned value is not synchronised with
+    /// other methods calls on OutputPort.
+    pub async fn subscribers(&self) -> Vec<ActorId> {
+        self.inner.subscribers().await
+    }
+
+    /// Subscribe an actor providing a filtering converter that
+    /// receive a reference to the message send to the actor
+    /// and return an Option<TReceiverMsg>. When the returned
+    /// value is None, no message are sent to the subscriber.
+    ///
+    /// This method may be used when a subscriber may not want
+    /// to receive all messages sent on the output port.
+    ///
+    /// If the actor is already subscribed, the subscription will not be
+    /// duplicated but the converter will be changed.
+    pub fn subscribe_with_filter<TReceiverMsg>(
+        &self,
+        receiver: ActorRef<TReceiverMsg>,
+        filter: impl Fn(&TMsg) -> Option<TReceiverMsg> + Send + 'static,
+    ) where
+        TReceiverMsg: Message,
+    {
+        self.inner.subscribe_with_filter(receiver, filter)
+    }
+
+    /// Remove the subscriber whose ActorId [ActorCell::get_id()] equals
+    /// id (if any)
+    pub fn remove_subscriber(&self, id: ActorId) {
+        self.inner.remove_subscriber_by_id(id)
     }
 }
 
@@ -248,7 +286,13 @@ mod inner {
     use crate::{ActorId, ActorRef, DerivedActorRef, Message};
 
     #[cfg(feature = "tokio_runtime")]
+    /// As we do a lot of iteratio without calling async
+    /// method while dispatching message, we consume 1 tokio
+    /// task budget unit every CONSUMBE_BUDGET_FACTOR message sent
     const CONSUME_BUDGET_FACTOR: usize = 32;
+    /// Each subscriber may receive a batch of MAX_BATCH_SIZE
+    /// before another batch is sent to an other subscriber
+    const MAX_BATCH_SIZE: usize = 32;
 
     enum OutportMessage<Id, TMsg> {
         Data(TMsg),
@@ -281,25 +325,37 @@ mod inner {
 
             crate::concurrency::spawn(async move {
                 let mut subscribers = Vec::<(Id, Box<dyn Subscriber<Id, TMsg>>)>::new();
-                let mut buffer = Vec::new();
-                let mut done = Vec::new();
-                const MAX_MESSAGE: usize = 32;
+                let mut batch = Vec::new();
+                //NB: This algorithm may look overcomplicated but it enhances the OuputPort benchmark
+                // by 70%!!! compared to a trivial algorith... the duration of sending message to the
+                // output port is divided by 3.
                 loop {
-                    let l = rx.len().clamp(1, MAX_MESSAGE);
-                    if rx.recv_many(&mut buffer, l).await == 0 {
+                    let l = rx.len().clamp(1, MAX_BATCH_SIZE);
+                    if rx.recv_many(&mut batch, l).await == 0 {
                         break;
                     }
-                    done.clear();
-                    done.extend(std::iter::repeat(false).take(buffer.len()));
 
                     let mut i = 0;
+                    let mut coop_count = 0;
+                    // First we iterate on subscribers already present
+                    // and send to ech all messages in the batch
                     'subs: while i < subscribers.len() {
-                        for msg in buffer.iter_mut() {
+                        // We processes the messages but only
+                        // apply change to subscribers that do affact
+                        // the current subscriber. The aim is to preserve
+                        // the sequentiality a process that would send to
+                        // the output port my expect.
+                        for msg in batch.iter_mut() {
                             match msg {
                                 OutportMessage::Data(v) => {
                                     if !subscribers[i].1.send(v) {
                                         subscribers.remove(i);
                                         continue 'subs;
+                                    } else {
+                                        coop_count += 1;
+                                        if coop_count % CONSUME_BUDGET_FACTOR == 0 {
+                                            tokio::task::coop::consume_budget().await
+                                        }
                                     }
                                 }
                                 OutportMessage::SetSubscriber(opt_subscriber) => {
@@ -342,8 +398,10 @@ mod inner {
                     }
 
                     let i0 = i;
-
-                    for msg in buffer.drain(..) {
+                    // The for the new subscribers we switch back
+                    // to a less efficient algrorithm we iterate first by messages
+                    // then by subscribers to ensure expected sequentiality.
+                    for msg in batch.drain(..) {
                         match msg {
                             OutportMessage::Data(v) => {
                                 // We do not want to hold a reference to dyn Subscriber
@@ -391,6 +449,9 @@ mod inner {
                             }
                             OutportMessage::SetSubscriber(None) => (),
                             OutportMessage::Subscribers(sender) => {
+                                // Finaly the observed subscriber list
+                                // may not reflect what may be expected
+                                // by sequentiality of message sent.
                                 _ = sender
                                     .send(subscribers.iter().map(|(id, _)| id.clone()).collect());
                             }
@@ -412,15 +473,15 @@ mod inner {
             r.await.unwrap_or_default()
         }
 
-        pub(super) fn set_subscriber(&self, subscriber: impl Subscriber<Id, TMsg>) {
-            _ = self
-                .0
-                .send(OutportMessage::SetSubscriber(Some(Box::new(subscriber))));
-        }
+        //pub(super) fn set_subscriber(&self, subscriber: impl Subscriber<Id, TMsg>) {
+        //    _ = self
+        //        .0
+        //        .send(OutportMessage::SetSubscriber(Some(Box::new(subscriber))));
+        //}
 
-        pub(super) fn remove_subscriber(&self, subscriber: &impl Subscriber<Id, TMsg>) {
-            self.remove_subscriber_by_id(subscriber.id())
-        }
+        //pub(super) fn remove_subscriber(&self, subscriber: &impl Subscriber<Id, TMsg>) {
+        //    self.remove_subscriber_by_id(subscriber.id())
+        //}
 
         pub(super) fn remove_subscriber_by_id(&self, id: Id) {
             _ = self.0.send(OutportMessage::RemoveSubscriber(id));
@@ -436,17 +497,22 @@ mod inner {
             F: Fn(TMsg) -> Option<TReceiverMsg> + Send + 'static,
             TReceiverMsg: Message,
         {
+            self.subscribe_with_filter(receiver, move |msg| converter(msg.clone()))
+        }
+        pub(super) fn subscribe_with_filter<TReceiverMsg>(
+            &self,
+            receiver: ActorRef<TReceiverMsg>,
+            filter: impl Fn(&TMsg) -> Option<TReceiverMsg> + Send + 'static,
+        ) where
+            TReceiverMsg: Message,
+        {
             match CheckedLocalActorRef::<TReceiverMsg>::try_from(receiver) {
-                Ok(checked_ref) => {
-                    self.set_subscriber_with_filter(checked_ref, move |msg| converter(msg.clone()))
-                }
-                Err(receiver) => {
-                    self.set_subscriber_with_filter(receiver, move |msg| converter(msg.clone()))
-                }
+                Ok(checked_ref) => self.set_subscriber_with_filter(checked_ref, filter),
+                Err(receiver) => self.set_subscriber_with_filter(receiver, filter),
             }
         }
 
-        pub(super) fn set_subscriber_with_filter<R: ActorReference>(
+        fn set_subscriber_with_filter<R: ActorReference>(
             &self,
             actor_ref: R,
             filter: impl Fn(&TMsg) -> Option<R::Msg> + Send + 'static,
