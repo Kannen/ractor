@@ -276,13 +276,42 @@ where
         port.subscribe(self.clone(), |msg| Some(O::from(msg)));
     }
 }
+struct Af<R, F> {
+    actor_ref: ActorRef<R>,
+    filter: F,
+}
+impl<I, R, F> OutputPortSubscriberTrait<I> for Af<R, F>
+where
+    I: Message + Clone,
+    R: Message,
+    F: Fn(&I) -> Option<R> + Clone + Send + 'static,
+{
+    fn subscribe_to_port(&self, port: &OutputPort<I>) {
+        port.subscribe_with_filter(self.actor_ref.clone(), self.filter.clone());
+    }
+}
+
+/// Create an output port subscriber with a filter
+///
+/// Once subscribed to the output port with
+/// [OuputPortSubscriberTrait::subscribe_to_port], only message sent on the
+/// [OuputPort] for which `filter` return `Some(_)` will be sent to `actor_ref`.
+pub fn output_port_subscriber<InputMessage, ReceiverMsg>(
+    actor_ref: ActorRef<ReceiverMsg>,
+    filter: impl Fn(&InputMessage) -> Option<ReceiverMsg> + Clone + Send + 'static,
+) -> Box<dyn OutputPortSubscriberTrait<InputMessage>>
+where
+    InputMessage: Message + Clone,
+    ReceiverMsg: Message,
+{
+    Box::new(Af { actor_ref, filter })
+}
 
 mod inner {
 
     use super::OutputMessage;
     use crate::actor::actor_ref::CheckedLocalActorRef;
     use crate::concurrency::{mpsc_unbounded, oneshot, MpscUnboundedSender, OneshotSender};
-    //use crate::concurrency::{mpsc_unbounded, oneshot, MpscUnboundedSender, OneshotSender};
     use crate::{ActorId, ActorRef, DerivedActorRef, Message};
 
     #[cfg(feature = "tokio_runtime")]
