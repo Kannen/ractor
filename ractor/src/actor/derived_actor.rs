@@ -14,6 +14,9 @@ use crate::ActorRef;
 use crate::Message;
 use crate::MessagingErr;
 
+use super::actor_ref::ActorDied;
+use super::actor_ref::CheckedLocalActorRef;
+
 /// [DerivedActorRef] wraps an [ActorCell] to send messages that can be converted
 /// into its accepted type using [From]. [DerivedActorRef] allows to create isolation
 /// between actors by hiding the actual message type.
@@ -127,7 +130,7 @@ use crate::MessagingErr;
 ///
 /// async fn example() {
 ///     let (kitchen_actor_ref, kitchen_actor_handle) = Actor::spawn(None, Kitchen, ()).await.unwrap();
-///     
+///
 ///     // derived actor ref can be passed to the pizza restaurant actor which accepts pizza orders from delivery apps
 ///     let pizza_restaurant: DerivedActorRef<PizzaOrder> = kitchen_actor_ref.get_derived();
 ///     pizza_restaurant.send_message(PizzaOrder {
@@ -208,21 +211,41 @@ impl<TMessage: Message> ActorRef<TMessage> {
         TFrom: TryFrom<TMessage>,
     {
         let actor_ref = self.clone();
-        let cast_and_send = move |msg: TFrom| {
-            actor_ref.send_message(msg.into()).map_err(|err| match err {
-                MessagingErr::SendErr(returned) => {
-                    let Ok(err) = TFrom::try_from(returned) else {
-                        panic!("Failed to deconvert message to from type");
-                    };
-                    MessagingErr::SendErr(err)
+        match CheckedLocalActorRef::<TMessage>::try_from(actor_ref) {
+            Ok(actor_ref) => {
+                let cast_and_send = move |msg: TFrom| {
+                    actor_ref
+                        .send_message(msg.into())
+                        .map_err(|ActorDied(returned)| {
+                            let Ok(err) = TFrom::try_from(returned) else {
+                                panic!("Failed to deconvert message to from type");
+                            };
+                            MessagingErr::SendErr(err)
+                        })
+                };
+                DerivedActorRef::<TFrom> {
+                    converter: Arc::new(cast_and_send),
+                    inner: self.get_cell(),
                 }
-                MessagingErr::ChannelClosed => MessagingErr::ChannelClosed,
-                MessagingErr::InvalidActorType => MessagingErr::InvalidActorType,
-            })
-        };
-        DerivedActorRef::<TFrom> {
-            converter: Arc::new(cast_and_send),
-            inner: self.get_cell(),
+            }
+            Err(actor_ref) => {
+                let cast_and_send = move |msg: TFrom| {
+                    actor_ref.send_message(msg.into()).map_err(|err| match err {
+                        MessagingErr::SendErr(returned) => {
+                            let Ok(err) = TFrom::try_from(returned) else {
+                                panic!("Failed to deconvert message to from type");
+                            };
+                            MessagingErr::SendErr(err)
+                        }
+                        MessagingErr::ChannelClosed => MessagingErr::ChannelClosed,
+                        MessagingErr::InvalidActorType => MessagingErr::InvalidActorType,
+                    })
+                };
+                DerivedActorRef::<TFrom> {
+                    converter: Arc::new(cast_and_send),
+                    inner: self.get_cell(),
+                }
+            }
         }
     }
 }
