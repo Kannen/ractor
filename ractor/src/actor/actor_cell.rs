@@ -17,6 +17,7 @@ use std::sync::Arc;
 use futures::FutureExt;
 
 use super::actor_properties::MuxedMessage;
+use super::actor_ref::ActorDied;
 use super::messages::Signal;
 use super::messages::StopMessage;
 use super::SupervisionEvent;
@@ -307,6 +308,18 @@ impl ActorCell {
     /// Retrieve the [super::Actor]'s unique identifier [ActorId]
     pub fn get_id(&self) -> ActorId {
         self.inner.id
+    }
+
+    /// ## Safety
+    /// This should only be called if self.type_id() == std::any::TypeId::of::<TMessage>
+    pub(crate) unsafe fn send_message_unchecked<TMessage>(
+        &self,
+        message: TMessage,
+    ) -> Result<(), MessagingErr<TMessage>>
+    where
+        TMessage: Message,
+    {
+        self.inner.send_message_unchecked(message)
     }
 
     /// Retrieve the [super::Actor]'s name

@@ -110,3 +110,123 @@ where
         None
     }
 }
+
+/// An [CheckedActorRef] is a strongly-typed wrapper over an [ActorCell]
+/// to provide some syntactic wrapping on the requirement to pass
+/// the actor's message type everywhere.
+///
+/// It differ from ActorRef in that it ensures that it does refer to an
+/// actor whose message type if TMessage.
+pub struct CheckedActorRef<TMessage> {
+    pub(crate) inner: ActorCell,
+    _tactor: PhantomData<fn() -> TMessage>,
+}
+
+impl<TMessage> Clone for CheckedActorRef<TMessage> {
+    fn clone(&self) -> Self {
+        CheckedActorRef {
+            inner: self.inner.clone(),
+            _tactor: PhantomData,
+        }
+    }
+}
+
+impl<TMessage> std::ops::Deref for CheckedActorRef<TMessage> {
+    type Target = ActorCell;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+/// Indicate actor is died or in the stopping process
+pub struct ActorDied<T>(pub T);
+impl<T> std::fmt::Debug for ActorDied<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ActorDied(_)")
+    }
+}
+impl<T> std::fmt::Display for ActorDied<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Message could not be sent because actor died")
+    }
+}
+impl<T> std::error::Error for ActorDied<T> {}
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
+
+/// Indicates that the actual actor message type is not the one
+/// expected
+pub struct InvalidTypeId;
+impl std::fmt::Display for InvalidTypeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Message type is not adequate")
+    }
+}
+impl std::error::Error for InvalidTypeId {}
+
+impl<TMessage: Message> TryFrom<ActorCell> for CheckedActorRef<TMessage> {
+    type Error = InvalidTypeId;
+    fn try_from(value: ActorCell) -> Result<Self, Self::Error> {
+        if value.is_message_type_of::<TMessage>() != Some(true) {
+            return Err(InvalidTypeId);
+        }
+        Ok(Self {
+            inner: value,
+            _tactor: PhantomData,
+        })
+    }
+}
+
+impl<TActor> From<CheckedActorRef<TActor>> for ActorCell {
+    fn from(value: CheckedActorRef<TActor>) -> Self {
+        value.inner
+    }
+}
+
+impl<TMessage> std::fmt::Debug for CheckedActorRef<TMessage> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl<TMessage> CheckedActorRef<TMessage> {
+    /// Retrieve a cloned [ActorCell] representing this [ActorRef]
+    pub fn get_cell(&self) -> ActorCell {
+        self.inner.clone()
+    }
+
+    /// Notify the supervisor and all monitors that a supervision event occurred.
+    /// Monitors receive a reduced copy of the supervision event which won't contain
+    /// the [crate::actor::BoxedState] and collapses the [crate::ActorProcessingErr]
+    /// exception to a [String]
+    ///
+    /// * `evt` - The event to send to this [crate::Actor]'s supervisors
+    pub fn notify_supervisor_and_monitors(&self, evt: SupervisionEvent) {
+        self.inner.notify_supervisor(evt)
+    }
+}
+
+impl<TMessage: Message> CheckedActorRef<TMessage> {
+    /// Send a strongly-typed message, constructing the boxed message on the fly
+    ///
+    /// * `message` - The message to send
+    ///
+    /// Returns [Ok(())] on successful message send, [Err(MessagingErr)] otherwise
+    pub fn send_message(&self, message: TMessage) -> Result<(), ActorDied<TMessage>> {
+        // SAFETY: by construction we ensure that TMessage type_id is that of
+        // the actor cell
+        unsafe {
+            self.inner
+                .send_message_unchecked(message)
+                .map_err(|e| match e {
+                    MessagingErr::SendErr(v) => ActorDied(v),
+                    MessagingErr::ChannelClosed => {
+                        unreachable!("unexpected error on send_message_unchecked")
+                    }
+                    MessagingErr::InvalidActorType => {
+                        unreachable!("unexpected error on send_message_unchecked")
+                    }
+                })
+        }
+    }
+}
