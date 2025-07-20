@@ -21,7 +21,6 @@ use crate::concurrency::MpscUnboundedSender as InputPort;
 use crate::concurrency::OneshotReceiver;
 use crate::concurrency::OneshotSender as OneshotInputPort;
 use crate::message::BoxedMessage;
-#[cfg(feature = "cluster")]
 use crate::message::LocalOrSerialized;
 #[cfg(feature = "cluster")]
 use crate::message::SerializedMessage;
@@ -179,10 +178,6 @@ impl ActorProperties {
         self.supervision.send(message).map_err(|e| e.into())
     }
 
-    pub(crate) fn message_type_id(&self) -> std::any::TypeId {
-        self.type_id
-    }
-
     pub(crate) fn send_message<TMessage>(
         &self,
         message: TMessage,
@@ -231,6 +226,49 @@ impl ActorProperties {
                     })
             }
         }
+    }
+    #[allow(unsafe_code)]
+    /// ## SAFETY
+    /// Shall only be called on an actor cell refering to a local
+    /// actor whose message type is TMessage
+    pub(crate) unsafe fn send_local_message_unchecked<TMessage>(
+        &self,
+        message: TMessage,
+    ) -> Result<(), MessagingErr<TMessage>>
+    where
+        TMessage: Message,
+    {
+        let status = self.get_status();
+        if status >= ActorStatus::Draining {
+            // if currently draining, stopping or stopped: reject messages directly.
+            return Err(MessagingErr::SendErr(message));
+        }
+        #[allow(unsafe_code)]
+        // SAFETY: safe as long as function contract is ensured by caller
+        let sender: &InputPort<MuxedMessage<TMessage>> = unsafe {
+            let ptr: &dyn Any = &*self.message;
+            &*(ptr as *const dyn Any as *const InputPort<MuxedMessage<TMessage>>)
+        };
+        let span = {
+            #[cfg(feature = "message_span_propogation")]
+            {
+                Some(tracing::Span::current())
+            }
+            #[cfg(not(feature = "message_span_propogation"))]
+            {
+                None
+            }
+        };
+        let boxed = BoxedMessage {
+            msg: LocalOrSerialized::Local(message),
+            span,
+        };
+        sender
+            .send(MuxedMessage::Message(boxed))
+            .map_err(|e| match e.0 {
+                MuxedMessage::Message(m) => MessagingErr::SendErr(TMessage::from_boxed(m).unwrap()),
+                _ => panic!("Expected a boxed message but got a drain message"),
+            })
     }
 
     pub(crate) fn drain(&self) -> Result<(), MessagingErr<()>> {

@@ -117,21 +117,21 @@ where
 ///
 /// It differ from ActorRef in that it ensures that it does refer to an
 /// actor whose message type if TMessage.
-pub struct CheckedActorRef<TMessage> {
+pub struct CheckedLocalActorRef<TMessage> {
     pub(crate) inner: ActorCell,
     _tactor: PhantomData<fn() -> TMessage>,
 }
 
-impl<TMessage> Clone for CheckedActorRef<TMessage> {
+impl<TMessage> Clone for CheckedLocalActorRef<TMessage> {
     fn clone(&self) -> Self {
-        CheckedActorRef {
+        CheckedLocalActorRef {
             inner: self.inner.clone(),
             _tactor: PhantomData,
         }
     }
 }
 
-impl<TMessage> std::ops::Deref for CheckedActorRef<TMessage> {
+impl<TMessage> std::ops::Deref for CheckedLocalActorRef<TMessage> {
     type Target = ActorCell;
 
     fn deref(&self) -> &Self::Target {
@@ -152,23 +152,12 @@ impl<T> std::fmt::Display for ActorDied<T> {
     }
 }
 impl<T> std::error::Error for ActorDied<T> {}
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 
-/// Indicates that the actual actor message type is not the one
-/// expected
-pub struct InvalidTypeId;
-impl std::fmt::Display for InvalidTypeId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Message type is not adequate")
-    }
-}
-impl std::error::Error for InvalidTypeId {}
-
-impl<TMessage: Message> TryFrom<ActorCell> for CheckedActorRef<TMessage> {
-    type Error = InvalidTypeId;
+impl<TMessage: Message> TryFrom<ActorCell> for CheckedLocalActorRef<TMessage> {
+    type Error = ActorCell;
     fn try_from(value: ActorCell) -> Result<Self, Self::Error> {
         if value.is_message_type_of::<TMessage>() != Some(true) {
-            return Err(InvalidTypeId);
+            return Err(value);
         }
         Ok(Self {
             inner: value,
@@ -176,20 +165,37 @@ impl<TMessage: Message> TryFrom<ActorCell> for CheckedActorRef<TMessage> {
         })
     }
 }
-
-impl<TActor> From<CheckedActorRef<TActor>> for ActorCell {
-    fn from(value: CheckedActorRef<TActor>) -> Self {
-        value.inner
+impl<TMessage: Message> TryFrom<ActorRef<TMessage>> for CheckedLocalActorRef<TMessage> {
+    type Error = ActorRef<TMessage>;
+    fn try_from(value: ActorRef<TMessage>) -> Result<Self, Self::Error> {
+        if value.inner.is_message_type_of::<TMessage>() != Some(true) {
+            return Err(value);
+        }
+        Ok(Self {
+            inner: value.inner,
+            _tactor: PhantomData,
+        })
     }
 }
 
-impl<TMessage> std::fmt::Debug for CheckedActorRef<TMessage> {
+impl<TMessage> From<CheckedLocalActorRef<TMessage>> for ActorCell {
+    fn from(value: CheckedLocalActorRef<TMessage>) -> Self {
+        value.inner
+    }
+}
+impl<TMessage> From<CheckedLocalActorRef<TMessage>> for ActorRef<TMessage> {
+    fn from(value: CheckedLocalActorRef<TMessage>) -> Self {
+        value.inner.into()
+    }
+}
+
+impl<TMessage> std::fmt::Debug for CheckedLocalActorRef<TMessage> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.inner.fmt(f)
     }
 }
 
-impl<TMessage> CheckedActorRef<TMessage> {
+impl<TMessage> CheckedLocalActorRef<TMessage> {
     /// Retrieve a cloned [ActorCell] representing this [ActorRef]
     pub fn get_cell(&self) -> ActorCell {
         self.inner.clone()
@@ -206,18 +212,19 @@ impl<TMessage> CheckedActorRef<TMessage> {
     }
 }
 
-impl<TMessage: Message> CheckedActorRef<TMessage> {
+impl<TMessage: Message> CheckedLocalActorRef<TMessage> {
     /// Send a strongly-typed message, constructing the boxed message on the fly
     ///
     /// * `message` - The message to send
     ///
     /// Returns [Ok(())] on successful message send, [Err(MessagingErr)] otherwise
     pub fn send_message(&self, message: TMessage) -> Result<(), ActorDied<TMessage>> {
+        #[allow(unsafe_code)]
         // SAFETY: by construction we ensure that TMessage type_id is that of
         // the actor cell
         unsafe {
             self.inner
-                .send_message_unchecked(message)
+                .send_local_message_unchecked(message)
                 .map_err(|e| match e {
                     MessagingErr::SendErr(v) => ActorDied(v),
                     MessagingErr::ChannelClosed => {

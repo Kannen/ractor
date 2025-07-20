@@ -242,6 +242,7 @@ where
 mod inner {
 
     use super::OutputMessage;
+    use crate::actor::actor_ref::CheckedLocalActorRef;
     use crate::concurrency::{mpsc_unbounded, MpscUnboundedSender};
     //use crate::concurrency::{mpsc_unbounded, oneshot, MpscUnboundedSender, OneshotSender};
     use crate::{ActorId, ActorRef, DerivedActorRef, Message};
@@ -381,7 +382,14 @@ mod inner {
             F: Fn(TMsg) -> Option<TReceiverMsg> + Send + 'static,
             TReceiverMsg: Message,
         {
-            self.set_subscriber_with_filter(receiver, move |msg| converter(msg.clone()))
+            match CheckedLocalActorRef::<TReceiverMsg>::try_from(receiver) {
+                Ok(checked_ref) => {
+                    self.set_subscriber_with_filter(checked_ref, move |msg| converter(msg.clone()))
+                }
+                Err(receiver) => {
+                    self.set_subscriber_with_filter(receiver, move |msg| converter(msg.clone()))
+                }
+            }
         }
 
         pub(super) fn set_subscriber_with_filter<R: ActorReference>(
@@ -448,6 +456,17 @@ mod inner {
         fn id(&self) -> ActorId;
     }
     impl<T: Message> ActorReference for ActorRef<T> {
+        type Msg = T;
+
+        fn send_message(&self, value: T) -> bool {
+            self.send_message(value).is_ok()
+        }
+
+        fn id(&self) -> ActorId {
+            self.get_id()
+        }
+    }
+    impl<T: Message> ActorReference for CheckedLocalActorRef<T> {
         type Msg = T;
 
         fn send_message(&self, value: T) -> bool {
