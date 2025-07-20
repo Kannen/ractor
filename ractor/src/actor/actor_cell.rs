@@ -9,6 +9,7 @@
 //! the internal properties, ports, states, etc. [ActorCell] is the basic primitive
 //! for references to a given actor and its communication channels
 
+use std::any::Any;
 use std::any::TypeId;
 use std::sync::Arc;
 
@@ -66,7 +67,7 @@ pub const ACTIVE_STATES: [ActorStatus; 3] = [
 ];
 
 /// The collection of ports an actor needs to listen to
-pub(crate) struct ActorPortSet {
+pub(crate) struct ActorPortSet<TMessage: Any + Send> {
     /// The inner signal port
     pub(crate) signal_rx: OneshotReceiver<Signal>,
     /// The inner stop port
@@ -74,10 +75,10 @@ pub(crate) struct ActorPortSet {
     /// The inner supervisor port
     pub(crate) supervisor_rx: InputPortReceiver<SupervisionEvent>,
     /// The inner message port
-    pub(crate) message_rx: InputPortReceiver<MuxedMessage>,
+    pub(crate) message_rx: InputPortReceiver<MuxedMessage<TMessage>>,
 }
 
-impl Drop for ActorPortSet {
+impl<TMessage: Any + Send> Drop for ActorPortSet<TMessage> {
     fn drop(&mut self) {
         // Close all the message ports and flush all the message queue backlogs.
         // See: https://docs.rs/tokio/0.1.22/tokio/sync/mpsc/index.html#clean-shutdown
@@ -94,7 +95,7 @@ impl Drop for ActorPortSet {
 }
 
 /// Messages that come in off an actor's port, with associated priority
-pub(crate) enum ActorPortMessage {
+pub(crate) enum ActorPortMessage<TMessage: Any + Send> {
     /// A signal message
     Signal(Signal),
     /// A stop message
@@ -102,10 +103,10 @@ pub(crate) enum ActorPortMessage {
     /// A supervision message
     Supervision(SupervisionEvent),
     /// A regular message
-    Message(MuxedMessage),
+    Message(MuxedMessage<TMessage>),
 }
 
-impl ActorPortSet {
+impl<TMsg: Any + Send> ActorPortSet<TMsg> {
     /// Run a future beside the signal port, so that
     /// the signal port can terminate the async work
     ///
@@ -161,7 +162,7 @@ impl ActorPortSet {
     /// in the event any of the channels is closed.
     pub(crate) async fn listen_in_priority(
         &mut self,
-    ) -> Result<ActorPortMessage, MessagingErr<()>> {
+    ) -> Result<ActorPortMessage<TMsg>, MessagingErr<()>> {
         #[cfg(feature = "async-std")]
         {
             crate::concurrency::select! {
@@ -239,7 +240,9 @@ impl ActorCell {
     /// * `name` - Optional name for the actor
     ///
     /// Returns a tuple [(ActorCell, ActorPortSet)] to bootstrap the [crate::Actor]
-    pub(crate) fn new<TActor>(name: Option<ActorName>) -> Result<(Self, ActorPortSet), SpawnErr>
+    pub(crate) fn new<TActor>(
+        name: Option<ActorName>,
+    ) -> Result<(Self, ActorPortSet<TActor::Msg>), SpawnErr>
     where
         TActor: Actor,
     {
@@ -274,7 +277,7 @@ impl ActorCell {
     pub(crate) fn new_remote<TActor>(
         name: Option<ActorName>,
         id: ActorId,
-    ) -> Result<(Self, ActorPortSet), SpawnErr>
+    ) -> Result<(Self, ActorPortSet<TActor::Msg>), SpawnErr>
     where
         TActor: Actor,
     {
