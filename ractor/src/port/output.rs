@@ -289,7 +289,7 @@ mod inner {
     /// As we do a lot of iteratio without calling async
     /// method while dispatching message, we consume 1 tokio
     /// task budget unit every CONSUMBE_BUDGET_FACTOR message sent
-    const CONSUME_BUDGET_FACTOR: usize = 32;
+    const CONSUME_BUDGET_FACTOR: u32 = 32;
     /// Each subscriber may receive a batch of MAX_BATCH_SIZE
     /// before another batch is sent to an other subscriber
     const MAX_BATCH_SIZE: usize = 32;
@@ -336,7 +336,7 @@ mod inner {
                     }
 
                     let mut i = 0;
-                    let mut coop_count = 0;
+                    let mut coop_count = 0u32;
                     // First we iterate on subscribers already present
                     // and send to ech all messages in the batch
                     'subs: while i < subscribers.len() {
@@ -352,7 +352,8 @@ mod inner {
                                         subscribers.remove(i);
                                         continue 'subs;
                                     } else {
-                                        coop_count += 1;
+                                        coop_count = coop_count.wrapping_add(1);
+                                        #[cfg(feature = "tokio_runtime")]
                                         if coop_count % CONSUME_BUDGET_FACTOR == 0 {
                                             tokio::task::coop::consume_budget().await
                                         }
@@ -414,6 +415,11 @@ mod inner {
                                         subscribers.remove(i);
                                     } else {
                                         i += 1;
+                                        #[cfg(feature = "tokio_runtime")]
+                                        if coop_count % CONSUME_BUDGET_FACTOR == 0 {
+                                            tokio::task::coop::consume_budget().await
+                                        }
+                                        coop_count = coop_count.wrapping_add(1);
                                     }
                                 }
                             }
