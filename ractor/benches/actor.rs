@@ -8,6 +8,7 @@ extern crate criterion;
 
 use criterion::BatchSize;
 use criterion::Criterion;
+use ractor::actor::actor_ref::CheckedLocalActorRef;
 use ractor::Actor;
 use ractor::ActorProcessingErr;
 use ractor::ActorRef;
@@ -255,7 +256,7 @@ fn process_messages(c: &mut Criterion) {
     impl Actor for MessagingActor {
         type Msg = BenchActorMessage;
 
-        type State = u64;
+        type State = (u64, CheckedLocalActorRef<BenchActorMessage>);
 
         type Arguments = ();
 
@@ -265,7 +266,7 @@ fn process_messages(c: &mut Criterion) {
             _: (),
         ) -> Result<Self::State, ActorProcessingErr> {
             let _ = myself.cast(BenchActorMessage);
-            Ok(0u64)
+            Ok((0u64, myself.try_into().unwrap()))
         }
 
         async fn handle(
@@ -274,11 +275,11 @@ fn process_messages(c: &mut Criterion) {
             _message: Self::Msg,
             state: &mut Self::State,
         ) -> Result<(), ActorProcessingErr> {
-            *state += 1;
-            if *state >= self.num_msgs {
+            state.0 += 1;
+            if state.0 >= self.num_msgs {
                 myself.stop(None);
             } else {
-                let _ = myself.cast(BenchActorMessage);
+                let _ = state.1.send_message(BenchActorMessage);
             }
             Ok(())
         }
