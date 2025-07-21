@@ -39,7 +39,7 @@ async fn test_single_forward() {
             _this_actor: crate::ActorRef<Self::Msg>,
             _: (),
         ) -> Result<Self::State, ActorProcessingErr> {
-            Ok(0u8)
+            Ok(0)
         }
 
         async fn handle(
@@ -258,8 +258,10 @@ mod output_port_subscriber_tests {
     use crate::RpcReplyPort;
 
     enum NumberPublisherMessage {
-        Publish(u8),
-        Subscribe(OutputPortSubscriber<u8>),
+        Publish(u64),
+        Subscribe(OutputPortSubscriber<u64>),
+        Unsubscribe(ActorId),
+        GetSubscribers(RpcReplyPort<Vec<ActorId>>),
     }
 
     #[cfg(feature = "cluster")]
@@ -273,7 +275,7 @@ mod output_port_subscriber_tests {
 
     #[cfg_attr(feature = "async-trait", crate::async_trait)]
     impl Actor for NumberPublisher {
-        type State = OutputPort<u8>;
+        type State = OutputPort<u64>;
         type Msg = NumberPublisherMessage;
         type Arguments = ();
 
@@ -298,6 +300,12 @@ mod output_port_subscriber_tests {
                 NumberPublisherMessage::Publish(value) => {
                     state.send(value);
                 }
+                NumberPublisherMessage::Unsubscribe(actor_id) => {
+                    state.unsubscribe(actor_id);
+                }
+                NumberPublisherMessage::GetSubscribers(reply) => {
+                    _ = reply.send(timeout(Duration::from_millis(10), state.subscribers()).await?);
+                }
             }
             Ok(())
         }
@@ -305,12 +313,12 @@ mod output_port_subscriber_tests {
 
     #[derive(Debug)]
     enum PlusSubscriberMessage {
-        Plus(u8),
-        Result(RpcReplyPort<u8>),
+        Plus(u64),
+        Result(RpcReplyPort<u64>),
     }
 
-    impl From<u8> for PlusSubscriberMessage {
-        fn from(value: u8) -> Self {
+    impl From<u64> for PlusSubscriberMessage {
+        fn from(value: u64) -> Self {
             PlusSubscriberMessage::Plus(value)
         }
     }
@@ -324,7 +332,7 @@ mod output_port_subscriber_tests {
     struct PlusSubscriber;
     #[cfg_attr(feature = "async-trait", crate::async_trait)]
     impl Actor for PlusSubscriber {
-        type State = u8;
+        type State = u64;
         type Msg = PlusSubscriberMessage;
         type Arguments = ();
 
@@ -358,8 +366,8 @@ mod output_port_subscriber_tests {
 
     #[derive(Debug)]
     enum MulSubscriberMessage {
-        Mul(u8),
-        Result(RpcReplyPort<u8>),
+        Mul(u64),
+        Result(RpcReplyPort<u64>),
     }
 
     #[cfg(feature = "cluster")]
@@ -368,8 +376,8 @@ mod output_port_subscriber_tests {
             false
         }
     }
-    impl From<u8> for MulSubscriberMessage {
-        fn from(value: u8) -> Self {
+    impl From<u64> for MulSubscriberMessage {
+        fn from(value: u64) -> Self {
             MulSubscriberMessage::Mul(value)
         }
     }
@@ -377,7 +385,7 @@ mod output_port_subscriber_tests {
     struct MulSubscriber;
     #[cfg_attr(feature = "async-trait", crate::async_trait)]
     impl Actor for MulSubscriber {
-        type State = u8;
+        type State = u64;
         type Msg = MulSubscriberMessage;
         type Arguments = ();
 
@@ -435,22 +443,249 @@ mod output_port_subscriber_tests {
             NumberPublisherMessage::Subscribe(Box::new(mul_subcriber_ref.clone()))
         )
         .unwrap();
-        println!("subscribers initialized");
-        println!("0 message sents");
 
         cast!(number_publisher_ref, NumberPublisherMessage::Publish(2)).unwrap();
-        println!("1 message sents");
         cast!(number_publisher_ref, NumberPublisherMessage::Publish(3)).unwrap();
-        println!("2 message sents");
+        // No duplication of subscription
 
-        println!("message sents pre sleep");
         crate::concurrency::sleep(Duration::from_millis(50)).await;
-        println!("message sents post sleep");
 
         let plus_result = call_t!(plus_subcriber_ref, PlusSubscriberMessage::Result, 10).unwrap();
         let mul_result = call_t!(mul_subcriber_ref, MulSubscriberMessage::Result, 10).unwrap();
         assert_eq!(2 + 3, plus_result);
         assert_eq!(2 * 3, mul_result);
+
+        let subscribers = call_t!(
+            number_publisher_ref,
+            NumberPublisherMessage::GetSubscribers,
+            10
+        )
+        .unwrap();
+        assert_eq!(subscribers.len(), 2);
+        assert!(subscribers.contains(&plus_subcriber_ref.get_id()));
+        assert!(subscribers.contains(&mul_subcriber_ref.get_id()));
+
+        // No duplication of subscription
+        cast!(
+            number_publisher_ref,
+            NumberPublisherMessage::Subscribe(Box::new(mul_subcriber_ref.clone()))
+        )
+        .unwrap();
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(4)).unwrap();
+        cast!(
+            number_publisher_ref,
+            NumberPublisherMessage::Unsubscribe(plus_subcriber_ref.get_id())
+        )
+        .unwrap();
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(5)).unwrap();
+        cast!(
+            number_publisher_ref,
+            NumberPublisherMessage::Subscribe(Box::new(plus_subcriber_ref.clone()))
+        )
+        .unwrap();
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(6)).unwrap();
+        cast!(
+            number_publisher_ref,
+            NumberPublisherMessage::Unsubscribe(plus_subcriber_ref.get_id())
+        )
+        .unwrap();
+        cast!(
+            number_publisher_ref,
+            NumberPublisherMessage::Unsubscribe(mul_subcriber_ref.get_id())
+        )
+        .unwrap();
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(7)).unwrap();
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(8)).unwrap();
+        cast!(
+            number_publisher_ref,
+            NumberPublisherMessage::Unsubscribe(plus_subcriber_ref.get_id())
+        )
+        .unwrap();
+
+        crate::concurrency::sleep(Duration::from_millis(50)).await;
+
+        let plus_result = call_t!(plus_subcriber_ref, PlusSubscriberMessage::Result, 10).unwrap();
+        let mul_result = call_t!(mul_subcriber_ref, MulSubscriberMessage::Result, 10).unwrap();
+        assert_eq!(2 + 3 + 4 + 6, plus_result);
+        assert_eq!(2 * 3 * 4 * 5 * 6, mul_result);
+
+        let subscribers = call_t!(
+            number_publisher_ref,
+            NumberPublisherMessage::GetSubscribers,
+            10
+        )
+        .unwrap();
+        assert_eq!(subscribers.len(), 0);
+
+        cast!(
+            number_publisher_ref,
+            NumberPublisherMessage::Subscribe(output_port_subscriber(
+                plus_subcriber_ref.clone(),
+                |v: &u64| if v % 2 == 1 { Some(*v) } else { None }
+            ))
+        )
+        .unwrap();
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(9)).unwrap();
+        cast!(
+            number_publisher_ref,
+            NumberPublisherMessage::Subscribe(output_port_subscriber(
+                mul_subcriber_ref.clone(),
+                |v: &u64| if v % 2 == 0 { Some(*v) } else { None }
+            ))
+        )
+        .unwrap();
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(10)).unwrap();
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(11)).unwrap();
+        cast!(
+            number_publisher_ref,
+            NumberPublisherMessage::Subscribe(output_port_subscriber(
+                mul_subcriber_ref.clone(),
+                |v: &u64| if v % 2 == 1 { Some(*v) } else { None }
+            ))
+        )
+        .unwrap();
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(12)).unwrap();
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(13)).unwrap();
+
+        crate::concurrency::sleep(Duration::from_millis(50)).await;
+
+        let plus_result = call_t!(plus_subcriber_ref, PlusSubscriberMessage::Result, 10).unwrap();
+        let mul_result = call_t!(mul_subcriber_ref, MulSubscriberMessage::Result, 10).unwrap();
+        assert_eq!(2 + 3 + 4 + 6 + 9 + 11 + 13, plus_result);
+        assert_eq!(2 * 3 * 4 * 5 * 6 * 10 * 13, mul_result);
+
+        let subscribers = call_t!(
+            number_publisher_ref,
+            NumberPublisherMessage::GetSubscribers,
+            10
+        )
+        .unwrap();
+        assert_eq!(subscribers.len(), 2);
+        assert!(subscribers.contains(&plus_subcriber_ref.get_id()));
+        assert!(subscribers.contains(&mul_subcriber_ref.get_id()));
+
+        number_publisher_ref.stop(None);
+        plus_subcriber_ref.stop(None);
+        mul_subcriber_ref.stop(None);
+
+        number_publisher_handler.await.unwrap();
+        plus_subscriber_handler.await.unwrap();
+        mul_subscriber_handler.await.unwrap();
+    }
+
+    #[crate::concurrency::test]
+    #[cfg_attr(
+        not(all(target_arch = "wasm32", target_os = "unknown")),
+        tracing_test::traced_test
+    )]
+    async fn test_output_port_subscriber_entire_batch() {
+        println!("start subscribers");
+        let (number_publisher_ref, number_publisher_handler) =
+            Actor::spawn(None, NumberPublisher, ()).await.unwrap();
+
+        let (plus_subcriber_ref, plus_subscriber_handler) =
+            Actor::spawn(None, PlusSubscriber, ()).await.unwrap();
+
+        let (mul_subcriber_ref, mul_subscriber_handler) =
+            Actor::spawn(None, MulSubscriber, ()).await.unwrap();
+
+        cast!(
+            number_publisher_ref,
+            NumberPublisherMessage::Subscribe(Box::new(plus_subcriber_ref.clone()))
+        )
+        .unwrap();
+        cast!(
+            number_publisher_ref,
+            NumberPublisherMessage::Subscribe(Box::new(mul_subcriber_ref.clone()))
+        )
+        .unwrap();
+
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(2)).unwrap();
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(3)).unwrap();
+        // No duplication of subscription
+
+        cast!(
+            number_publisher_ref,
+            NumberPublisherMessage::Subscribe(Box::new(mul_subcriber_ref.clone()))
+        )
+        .unwrap();
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(4)).unwrap();
+        cast!(
+            number_publisher_ref,
+            NumberPublisherMessage::Unsubscribe(plus_subcriber_ref.get_id())
+        )
+        .unwrap();
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(5)).unwrap();
+        cast!(
+            number_publisher_ref,
+            NumberPublisherMessage::Subscribe(Box::new(plus_subcriber_ref.clone()))
+        )
+        .unwrap();
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(6)).unwrap();
+        cast!(
+            number_publisher_ref,
+            NumberPublisherMessage::Unsubscribe(plus_subcriber_ref.get_id())
+        )
+        .unwrap();
+        cast!(
+            number_publisher_ref,
+            NumberPublisherMessage::Unsubscribe(mul_subcriber_ref.get_id())
+        )
+        .unwrap();
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(7)).unwrap();
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(8)).unwrap();
+        cast!(
+            number_publisher_ref,
+            NumberPublisherMessage::Unsubscribe(plus_subcriber_ref.get_id())
+        )
+        .unwrap();
+
+        cast!(
+            number_publisher_ref,
+            NumberPublisherMessage::Subscribe(output_port_subscriber(
+                plus_subcriber_ref.clone(),
+                |v: &u64| if v % 2 == 1 { Some(*v) } else { None }
+            ))
+        )
+        .unwrap();
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(9)).unwrap();
+        cast!(
+            number_publisher_ref,
+            NumberPublisherMessage::Subscribe(output_port_subscriber(
+                mul_subcriber_ref.clone(),
+                |v: &u64| if v % 2 == 0 { Some(*v) } else { None }
+            ))
+        )
+        .unwrap();
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(10)).unwrap();
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(11)).unwrap();
+        cast!(
+            number_publisher_ref,
+            NumberPublisherMessage::Subscribe(output_port_subscriber(
+                mul_subcriber_ref.clone(),
+                |v: &u64| if v % 2 == 1 { Some(*v) } else { None }
+            ))
+        )
+        .unwrap();
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(12)).unwrap();
+        cast!(number_publisher_ref, NumberPublisherMessage::Publish(13)).unwrap();
+
+        crate::concurrency::sleep(Duration::from_millis(50)).await;
+
+        let plus_result = call_t!(plus_subcriber_ref, PlusSubscriberMessage::Result, 10).unwrap();
+        let mul_result = call_t!(mul_subcriber_ref, MulSubscriberMessage::Result, 10).unwrap();
+        assert_eq!(2 + 3 + 4 + 6 + 9 + 11 + 13, plus_result);
+        assert_eq!(2 * 3 * 4 * 5 * 6 * 10 * 13, mul_result);
+
+        let subscribers = call_t!(
+            number_publisher_ref,
+            NumberPublisherMessage::GetSubscribers,
+            10
+        )
+        .unwrap();
+        assert_eq!(subscribers.len(), 2);
+        assert!(subscribers.contains(&plus_subcriber_ref.get_id()));
+        assert!(subscribers.contains(&mul_subcriber_ref.get_id()));
 
         number_publisher_ref.stop(None);
         plus_subcriber_ref.stop(None);

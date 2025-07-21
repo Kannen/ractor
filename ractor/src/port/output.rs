@@ -115,7 +115,7 @@ where
 
     /// Remove the subscriber whose ActorId [ActorCell::get_id()] equals
     /// id (if any)
-    pub fn remove_subscriber(&self, id: ActorId) {
+    pub fn unsubscribe(&self, id: ActorId) {
         self.inner.remove_subscriber_by_id(id)
     }
 }
@@ -291,19 +291,22 @@ where
     }
 }
 
-/// Create an output port subscriber with a filter
+/// Create an output port subscriber with a filter.
 ///
-/// Once subscribed to the output port with
-/// [OuputPortSubscriberTrait::subscribe_to_port], only message sent on the
-/// [OuputPort] for which `filter` return `Some(_)` will be sent to `actor_ref`.
-pub fn output_port_subscriber<InputMessage, ReceiverMsg>(
+/// The filter must be a fonction that takes by reference the OutputPort message type
+/// and return an `Option<O>`, where `O` is a type that can be converted into the actor
+/// reference message type using `Into::into`. When the filter return None, no message
+/// will be sent.
+pub fn output_port_subscriber<InputMessage, ReceiverMsg, DerivedMsg>(
     actor_ref: ActorRef<ReceiverMsg>,
-    filter: impl Fn(&InputMessage) -> Option<ReceiverMsg> + Clone + Send + 'static,
+    filter: impl for<'a> Fn(&'a InputMessage) -> Option<DerivedMsg> + Clone + Send + 'static,
 ) -> Box<dyn OutputPortSubscriberTrait<InputMessage>>
 where
     InputMessage: Message + Clone,
     ReceiverMsg: Message,
+    ReceiverMsg: From<DerivedMsg>,
 {
+    let filter = move |v: &InputMessage| -> Option<ReceiverMsg> { filter(v).map(|v| v.into()) };
     Box::new(Af { actor_ref, filter })
 }
 
