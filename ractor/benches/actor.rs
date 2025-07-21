@@ -386,6 +386,7 @@ fn send_and_process_message_concurrently(c: &mut Criterion) {
                             Actor::spawn(None, MessagingActor { num_msgs: NUM_MSGS }, ())
                                 .await
                                 .expect("Failed to create test actor");
+                        let r: CheckedLocalActorRef<i32> = r.try_into().unwrap();
                         (r, handle)
                     })
                 }
@@ -396,6 +397,7 @@ fn send_and_process_message_concurrently(c: &mut Criterion) {
                             Actor::spawn(None, MessagingActor { num_msgs: NUM_MSGS }, ())
                                 .await
                                 .expect("Failed to create test actor");
+                        let r: CheckedLocalActorRef<i32> = r.try_into().unwrap();
                         (r, handle)
                     })
                 }
