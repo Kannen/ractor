@@ -334,6 +334,98 @@ fn process_messages(c: &mut Criterion) {
 }
 
 #[allow(clippy::async_yields_async)]
+fn send_and_process_message_concurrently(c: &mut Criterion) {
+    const NUM_MSGS: u64 = 100000;
+
+    struct MessagingActor {
+        num_msgs: u64,
+    }
+
+    #[cfg_attr(feature = "async-trait", ractor::async_trait)]
+    impl Actor for MessagingActor {
+        type Msg = i32;
+
+        type State = u64;
+
+        type Arguments = ();
+
+        async fn pre_start(
+            &self,
+            _myself: ActorRef<Self::Msg>,
+            _: (),
+        ) -> Result<Self::State, ActorProcessingErr> {
+            Ok(0u64)
+        }
+
+        async fn handle(
+            &self,
+            myself: ActorRef<Self::Msg>,
+            _message: Self::Msg,
+            state: &mut Self::State,
+        ) -> Result<(), ActorProcessingErr> {
+            *state += 1;
+            if *state >= self.num_msgs {
+                myself.stop(None);
+            }
+            Ok(())
+        }
+    }
+
+    let id = format!("Waiting on {NUM_MSGS} messages to be sent and processed concurrently");
+    #[cfg(not(feature = "async-std"))]
+    let runtime = tokio::runtime::Builder::new_multi_thread().build().unwrap();
+    #[cfg(feature = "async-std")]
+    let _ = async_std::task::block_on(async {});
+    c.bench_function(&id, move |b| {
+        b.iter_batched(
+            || {
+                #[cfg(not(feature = "async-std"))]
+                {
+                    runtime.block_on(async move {
+                        let (r, handle) =
+                            Actor::spawn(None, MessagingActor { num_msgs: NUM_MSGS }, ())
+                                .await
+                                .expect("Failed to create test actor");
+                        (r, handle)
+                    })
+                }
+                #[cfg(feature = "async-std")]
+                {
+                    async_std::task::block_on(async move {
+                        let (r, handle) =
+                            Actor::spawn(None, MessagingActor { num_msgs: NUM_MSGS }, ())
+                                .await
+                                .expect("Failed to create test actor");
+                        (r, handle)
+                    })
+                }
+            },
+            |(r, handle)| {
+                #[cfg(not(feature = "async-std"))]
+                {
+                    runtime.block_on(async move {
+                        for _ in 0..NUM_MSGS {
+                            _ = r.send_message(33);
+                        }
+                        let _ = handle.await;
+                    })
+                }
+                #[cfg(feature = "async-std")]
+                {
+                    async_std::task::block_on(async move {
+                        for _ in 0..NUM_MSGS {
+                            _ = r.send_message(33);
+                        }
+                        let _ = handle.await;
+                    })
+                }
+            },
+            BatchSize::PerIteration,
+        );
+    });
+}
+
+#[allow(clippy::async_yields_async)]
 fn process_output_port_messages(c: &mut Criterion) {
     const NUM_MSGS: u64 = 1000;
     const NUM_RECEIVERS: u64 = 100;
@@ -490,6 +582,7 @@ criterion_group!(
     create_actors,
     schedule_work,
     process_messages,
+    send_and_process_message_concurrently,
     process_output_port_messages
 );
 criterion_main!(actors);
