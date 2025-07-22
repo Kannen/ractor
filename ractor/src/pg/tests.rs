@@ -117,7 +117,12 @@ async fn test_which_scopes_and_groups() {
 
     let scopes_and_groups = pg::which_scopes_and_groups();
     // println!("Scopes and groups are: {:#?}", scopes_and_groups);
-    assert_eq!(4, scopes_and_groups.len());
+    assert_eq!(
+        4,
+        scopes_and_groups.len(),
+        "expected 4 scopes but got {:?}",
+        scopes_and_groups
+    );
 
     // Cleanup
     actor.stop(None);
@@ -210,6 +215,7 @@ async fn test_multiple_members_in_scoped_group() {
 }
 
 #[named]
+#[serial]
 #[crate::concurrency::test]
 #[cfg_attr(
     not(all(target_arch = "wasm32", target_os = "unknown")),
@@ -615,6 +621,7 @@ async fn test_pg_monitoring() {
     .await;
 
     // kill the pg member
+    println!("close pg test actor");
     test_actor.stop(None);
     test_handle.await.expect("Actor cleanup failed");
     // it should have notified that it's unsubscribed
@@ -625,6 +632,7 @@ async fn test_pg_monitoring() {
     .await;
 
     // cleanup
+    println!("close pg monitor");
     monitor_actor.stop(None);
     monitor_handle.await.expect("Actor cleanup failed");
 }

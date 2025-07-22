@@ -20,6 +20,7 @@ use super::ThreadLocalActorSpawner;
 use crate::actor::actor_cell;
 use crate::actor::actor_cell::ActorPortSet;
 use crate::actor::actor_properties::ActorProperties;
+use crate::actor::actor_properties::MemberShip;
 use crate::actor::actor_properties::MuxedMessage;
 use crate::actor::get_panic_string;
 use crate::actor::messages::StopMessage;
@@ -101,9 +102,9 @@ impl ActorProperties {
             Self {
                 id,
                 name,
-                status: Arc::new(AtomicU8::new(ActorStatus::Unstarted as u8)),
+                status: AtomicU8::new(ActorStatus::Unstarted as u8),
                 signal: Mutex::new(Some(tx_signal)),
-                wait_handler: Arc::new(mpsc::Notify::new()),
+                wait_handler: mpsc::Notify::new(),
                 stop: Mutex::new(Some(tx_stop)),
                 supervision: tx_supervision,
                 message: Box::new(tx_message),
@@ -113,6 +114,7 @@ impl ActorProperties {
                 supports_remoting: TActor::Msg::serializable(),
                 #[cfg(feature = "derived-actor-from-cell")]
                 derived_provider: Box::new(DerivedProviderTypeLocal::<TActor>::new()),
+                member_ship: Mutex::new(Some(MemberShip::default())),
             },
             rx_signal,
             rx_stop,
