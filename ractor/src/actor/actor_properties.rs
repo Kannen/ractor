@@ -7,7 +7,11 @@ use std::any::Any;
 use std::borrow::Borrow;
 use std::hash::Hash;
 use std::sync::atomic::AtomicU8;
+#[cfg(feature = "statistics")]
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+#[cfg(feature = "statistics")]
+use std::sync::Arc;
 use std::sync::Mutex;
 
 use crate::actor::messages::StopMessage;
@@ -80,6 +84,12 @@ pub(crate) struct MemberShip {
     pub(crate) listened_scopes: Vec<ScopeName>,
 }
 
+#[cfg(feature = "statistics")]
+#[derive(Debug, Default, Clone)]
+pub(crate) struct Statistics {
+    pub(crate) message_queue_len: Arc<AtomicUsize>,
+}
+
 // The inner-properties of an Actor
 pub(crate) struct ActorProperties {
     pub(crate) id: ActorId,
@@ -97,6 +107,8 @@ pub(crate) struct ActorProperties {
     #[cfg(feature = "derived-actor-from-cell")]
     pub(crate) derived_provider: Box<dyn DerivedProvider>,
     pub(crate) member_ship: Mutex<Option<MemberShip>>,
+    #[cfg(feature = "statistics")]
+    pub(crate) statistics: Statistics,
 }
 
 impl ActorProperties {
@@ -149,12 +161,18 @@ impl ActorProperties {
                 #[cfg(feature = "derived-actor-from-cell")]
                 derived_provider: Box::new(DerivedProviderType::<TActor>::new()),
                 member_ship: Mutex::new(Some(MemberShip::default())),
+                #[cfg(feature = "statistics")]
+                statistics: Statistics::default(),
             },
             rx_signal,
             rx_stop,
             rx_supervision,
             rx_message,
         )
+    }
+    #[cfg(feature = "statistics")]
+    pub(crate) fn statistics(&self) -> &Statistics {
+        &self.statistics
     }
     /// Declare removal of membership to scope/group.
     pub(crate) fn can_monitor(&self) -> bool {

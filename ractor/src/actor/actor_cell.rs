@@ -13,12 +13,16 @@ use std::any::Any;
 use std::any::TypeId;
 use std::borrow::Borrow;
 use std::hash::Hash;
+#[cfg(feature = "statistics")]
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 #[cfg(feature = "async-std")]
 use futures::FutureExt;
 
 use super::actor_properties::MuxedMessage;
+#[cfg(feature = "statistics")]
+use super::actor_properties::Statistics;
 use super::messages::Signal;
 use super::messages::StopMessage;
 use super::SupervisionEvent;
@@ -80,6 +84,9 @@ pub(crate) struct ActorPortSet<TMessage: Any + Send> {
     pub(crate) supervisor_rx: InputPortReceiver<SupervisionEvent>,
     /// The inner message port
     pub(crate) message_rx: InputPortReceiver<MuxedMessage<TMessage>>,
+    /// The inner statistics
+    #[cfg(feature = "statistics")]
+    pub(crate) statistics: Statistics,
 }
 
 impl<TMessage: Any + Send> Drop for ActorPortSet<TMessage> {
@@ -197,6 +204,8 @@ impl<TMsg: Any + Send> ActorPortSet<TMsg> {
                     supervision.map(ActorPortMessage::Supervision).ok_or(MessagingErr::ChannelClosed)
                 }
                 message = self.message_rx.recv() => {
+                    #[cfg(feature = "statistics")]
+                    self.statistics.message_queue_len.store(self.message_rx.len(),Ordering::Relaxed);
                     message.map(ActorPortMessage::Message).ok_or(MessagingErr::ChannelClosed)
                 }
             }
@@ -257,6 +266,8 @@ impl ActorCell {
         TActor: Actor,
     {
         let (props, rx1, rx2, rx3, rx4) = ActorProperties::new::<TActor>(name.clone());
+        #[cfg(feature = "statistics")]
+        let statistics = props.statistics.clone();
         let cell = Self {
             inner: Arc::new(props),
         };
@@ -278,6 +289,8 @@ impl ActorCell {
                 stop_rx: rx2,
                 supervisor_rx: rx3,
                 message_rx: rx4,
+                #[cfg(feature = "statistics")]
+                statistics,
             },
         ))
     }
@@ -296,6 +309,8 @@ impl ActorCell {
         }
 
         let (props, rx1, rx2, rx3, rx4) = ActorProperties::new_remote::<TActor>(name, id);
+        #[cfg(feature = "statistics")]
+        let statistics = props.statistics().clone();
         let cell = Self {
             inner: Arc::new(props),
         };
@@ -310,6 +325,8 @@ impl ActorCell {
                 stop_rx: rx2,
                 supervisor_rx: rx3,
                 message_rx: rx4,
+                #[cfg(feature = "statistics")]
+                statistics,
             },
         ))
     }
@@ -337,6 +354,17 @@ impl ActorCell {
     /// Retrieve the [super::Actor]'s name
     pub fn get_name(&self) -> Option<ActorName> {
         self.inner.name.clone()
+    }
+
+    /// Retrieve how many message are actualy in the message queue of the actor
+    ///
+    /// The value may not be up to date
+    #[cfg(feature = "statistics")]
+    pub fn get_message_queue_len(&self) -> usize {
+        self.inner
+            .statistics()
+            .message_queue_len
+            .load(Ordering::Relaxed)
     }
 
     /// Retrieve the current status of an [super::Actor]

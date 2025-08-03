@@ -22,6 +22,8 @@ use crate::actor::actor_cell::ActorPortSet;
 use crate::actor::actor_properties::ActorProperties;
 use crate::actor::actor_properties::MemberShip;
 use crate::actor::actor_properties::MuxedMessage;
+#[cfg(feature = "statistics")]
+use crate::actor::actor_properties::Statistics;
 use crate::actor::get_panic_string;
 use crate::actor::messages::StopMessage;
 #[cfg(feature = "derived-actor-from-cell")]
@@ -54,6 +56,8 @@ impl ActorCell {
             crate::actor::actor_properties::ActorProperties::new_thread_local::<TActor>(
                 name.clone(),
             );
+        #[cfg(feature = "statistics")]
+        let statistics = props.statistics().clone();
         let cell = Self {
             inner: Arc::new(props),
         };
@@ -75,6 +79,8 @@ impl ActorCell {
                 stop_rx: rx2,
                 supervisor_rx: rx3,
                 message_rx: rx4,
+                #[cfg(feature = "statistics")]
+                statistics,
             },
         ))
     }
@@ -115,6 +121,8 @@ impl ActorProperties {
                 #[cfg(feature = "derived-actor-from-cell")]
                 derived_provider: Box::new(DerivedProviderTypeLocal::<TActor>::new()),
                 member_ship: Mutex::new(Some(MemberShip::default())),
+                #[cfg(feature = "statistics")]
+                statistics: Statistics::default(),
             },
             rx_signal,
             rx_stop,
