@@ -26,7 +26,6 @@ use crate::concurrency::MpscUnboundedSender as InputPort;
 use crate::concurrency::OneshotReceiver;
 use crate::concurrency::OneshotSender as OneshotInputPort;
 use crate::message::BoxedMessage;
-#[cfg(feature = "cluster")]
 use crate::message::LocalOrSerialized;
 #[cfg(feature = "cluster")]
 use crate::message::SerializedMessage;

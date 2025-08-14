@@ -35,6 +35,7 @@ default = [
     "tokio_runtime",
     "message_span_propogation",
     "derived-actor-from-cell",
+    "output-port-v2",
 ]
 
 [dependencies]

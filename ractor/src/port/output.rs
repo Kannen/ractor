@@ -33,7 +33,7 @@ impl<T: Message + Clone> OutputMessage for T {}
 pub use v1::OutputPort;
 
 #[cfg(feature = "output-port-v2")]
-pub use v2::OutputPort;
+pub use v2::{output_port_subscriber, OutputPort};
 
 #[cfg(not(feature = "output-port-v2"))]
 mod v1 {
@@ -164,7 +164,7 @@ mod v1 {
 
 #[cfg(feature = "output-port-v2")]
 mod v2 {
-    use crate::{ActorId, ActorRef, Message, OutputMessage};
+    use crate::{port::OutputPortSubscriberTrait, ActorId, ActorRef, Message, OutputMessage};
     use std::fmt::Debug;
 
     /// An [OutputPort] is a publish-subscribe mechanism for connecting actors together.
@@ -193,7 +193,7 @@ mod v2 {
     {
         fn default() -> Self {
             Self {
-                inner: inner::OutputPort::default(),
+                inner: inner::OutputPort::new(false),
             }
         }
     }
@@ -223,12 +223,82 @@ mod v2 {
         pub fn send(&self, msg: TMsg) {
             self.inner.send(msg)
         }
+
+        /// Retrive the list of actors ids of actor currently
+        /// subscribed to this output port.
+        ///
+        /// Not that the returned value is not synchronised with
+        /// other methods calls on OutputPort.
+        pub async fn subscribers(&self) -> Vec<ActorId> {
+            self.inner.subscribers().await
+        }
+
+        /// Subscribe an actor providing a filtering converter that
+        /// receive a reference to the message send to the actor
+        /// and return an Option<TReceiverMsg>. When the returned
+        /// value is None, no message are sent to the subscriber.
+        ///
+        /// This method may be used when a subscriber may not want
+        /// to receive all messages sent on the output port.
+        ///
+        /// If the actor is already subscribed, the subscription will not be
+        /// duplicated but the converter will be changed.
+        pub fn subscribe_with_filter<TReceiverMsg>(
+            &self,
+            receiver: ActorRef<TReceiverMsg>,
+            filter: impl Fn(&TMsg) -> Option<TReceiverMsg> + Send + 'static,
+        ) where
+            TReceiverMsg: Message,
+        {
+            self.inner.subscribe_with_filter(receiver, filter)
+        }
+
+        /// Remove the subscriber whose ActorId [ActorCell::get_id()] equals
+        /// id (if any)
+        pub fn unsubscribe(&self, id: ActorId) {
+            self.inner.remove_subscriber_by_id(id)
+        }
+    }
+
+    struct Af<R, F> {
+        actor_ref: ActorRef<R>,
+        filter: F,
+    }
+    impl<I, R, F> OutputPortSubscriberTrait<I> for Af<R, F>
+    where
+        I: Message + Clone,
+        R: Message,
+        F: Fn(&I) -> Option<R> + Clone + Send + 'static,
+    {
+        fn subscribe_to_port(&self, port: &OutputPort<I>) {
+            port.subscribe_with_filter(self.actor_ref.clone(), self.filter.clone());
+        }
+    }
+
+    /// Create an output port subscriber with a filter.
+    ///
+    /// The filter must be a fonction that takes by reference the OutputPort message type
+    /// and return an `Option<O>`, where `O` is a type that can be converted into the actor
+    /// reference message type using `Into::into`. When the filter return None, no message
+    /// will be sent.
+    pub fn output_port_subscriber<InputMessage, ReceiverMsg, DerivedMsg>(
+        actor_ref: ActorRef<ReceiverMsg>,
+        filter: impl for<'a> Fn(&'a InputMessage) -> Option<DerivedMsg> + Clone + Send + 'static,
+    ) -> Box<dyn OutputPortSubscriberTrait<InputMessage>>
+    where
+        InputMessage: Message + Clone,
+        ReceiverMsg: Message,
+        ReceiverMsg: From<DerivedMsg>,
+    {
+        let filter = move |v: &InputMessage| -> Option<ReceiverMsg> { filter(v).map(|v| v.into()) };
+        Box::new(Af { actor_ref, filter })
     }
 
     mod inner {
 
         use super::OutputMessage;
-        use crate::concurrency::{mpsc_unbounded, MpscUnboundedSender};
+        use crate::actor::actor_ref::CheckedLocalActorRef;
+        use crate::concurrency::{mpsc_unbounded, oneshot, MpscUnboundedSender, OneshotSender};
         //use crate::concurrency::{mpsc_unbounded, oneshot, MpscUnboundedSender, OneshotSender};
         use crate::{ActorId, ActorRef, DerivedActorRef, Message};
 
@@ -244,8 +314,8 @@ mod v2 {
         enum OutportMessage<Id, TMsg> {
             Data(TMsg),
             SetSubscriber(Option<Box<dyn Subscriber<Id, TMsg>>>),
-            //RemoveSubscriber(Id),
-            //Subscribers(OneshotSender<Vec<Id>>),
+            RemoveSubscriber(Id),
+            Subscribers(OneshotSender<Vec<Id>>),
         }
 
         pub(super) trait Subscriber<Id, TMsg: OutputMessage>: Send + 'static {
@@ -332,6 +402,14 @@ mod v2 {
                                             subscribers.push((subscriber.id(), subscriber));
                                         }
                                     }
+                                    OutportMessage::RemoveSubscriber(id) => {
+                                        if *id != subscribers[i].0 {
+                                            continue;
+                                        }
+                                        subscribers.remove(i);
+                                        continue 'subs;
+                                    }
+                                    OutportMessage::Subscribers(_) => (),
                                 }
                             }
                             i += 1;
@@ -380,6 +458,27 @@ mod v2 {
                                     }
                                 }
                                 OutportMessage::SetSubscriber(None) => (),
+                                OutportMessage::RemoveSubscriber(id) => {
+                                    if allow_duplicate_subscription {
+                                        subscribers.retain(|(sid, _)| sid != &id);
+                                    } else {
+                                        // As we ensure there is only 1 id in the vector, we can only
+                                        // remove the first find subscriber which has the right id.
+                                        if let Some(i) =
+                                            subscribers.iter().position(|(sid, _)| sid == &id)
+                                        {
+                                            subscribers.remove(i);
+                                        }
+                                    }
+                                }
+                                OutportMessage::Subscribers(sender) => {
+                                    // Finaly the observed subscriber list
+                                    // may not reflect what may be expected
+                                    // by sequentiality of message sent.
+                                    _ = sender.send(
+                                        subscribers.iter().map(|(id, _)| id.clone()).collect(),
+                                    );
+                                }
                             }
                         }
                     }
@@ -390,6 +489,15 @@ mod v2 {
 
             pub(super) fn send(&self, value: TMsg) {
                 _ = self.0.send(OutportMessage::Data(value));
+            }
+            pub(super) async fn subscribers(&self) -> Vec<Id> {
+                let (s, r) = oneshot();
+                _ = self.0.send(OutportMessage::Subscribers(s));
+                r.await.unwrap_or_default()
+            }
+
+            pub(super) fn remove_subscriber_by_id(&self, id: Id) {
+                _ = self.0.send(OutportMessage::RemoveSubscriber(id));
             }
         }
 
@@ -402,10 +510,22 @@ mod v2 {
                 F: Fn(TMsg) -> Option<TReceiverMsg> + Send + 'static,
                 TReceiverMsg: Message,
             {
-                self.set_subscriber_with_filter(receiver, move |msg| converter(msg.clone()))
+                self.subscribe_with_filter(receiver, move |msg| converter(msg.clone()))
+            }
+            pub(super) fn subscribe_with_filter<TReceiverMsg>(
+                &self,
+                receiver: ActorRef<TReceiverMsg>,
+                filter: impl Fn(&TMsg) -> Option<TReceiverMsg> + Send + 'static,
+            ) where
+                TReceiverMsg: Message,
+            {
+                match CheckedLocalActorRef::<TReceiverMsg>::try_from(receiver) {
+                    Ok(checked_ref) => self.set_subscriber_with_filter(checked_ref, filter),
+                    Err(receiver) => self.set_subscriber_with_filter(receiver, filter),
+                }
             }
 
-            pub(super) fn set_subscriber_with_filter<R: ActorReference>(
+            fn set_subscriber_with_filter<R: ActorReference>(
                 &self,
                 actor_ref: R,
                 filter: impl Fn(&TMsg) -> Option<R::Msg> + Send + 'static,
@@ -490,40 +610,17 @@ mod v2 {
                 self.get_id()
             }
         }
-    }
-    /// Retrive the list of actors ids of actor currently
-    /// subscribed to this output port.
-    ///
-    /// Not that the returned value is not synchronised with
-    /// other methods calls on OutputPort.
-    pub async fn subscribers(&self) -> Vec<ActorId> {
-        self.inner.subscribers().await
-    }
+        impl<T: Message> ActorReference for CheckedLocalActorRef<T> {
+            type Msg = T;
 
-    /// Subscribe an actor providing a filtering converter that
-    /// receive a reference to the message send to the actor
-    /// and return an Option<TReceiverMsg>. When the returned
-    /// value is None, no message are sent to the subscriber.
-    ///
-    /// This method may be used when a subscriber may not want
-    /// to receive all messages sent on the output port.
-    ///
-    /// If the actor is already subscribed, the subscription will not be
-    /// duplicated but the converter will be changed.
-    pub fn subscribe_with_filter<TReceiverMsg>(
-        &self,
-        receiver: ActorRef<TReceiverMsg>,
-        filter: impl Fn(&TMsg) -> Option<TReceiverMsg> + Send + 'static,
-    ) where
-        TReceiverMsg: Message,
-    {
-        self.inner.subscribe_with_filter(receiver, filter)
-    }
+            fn send_message(&self, value: T) -> bool {
+                self.send_message(value).is_ok()
+            }
 
-    /// Remove the subscriber whose ActorId [ActorCell::get_id()] equals
-    /// id (if any)
-    pub fn unsubscribe(&self, id: ActorId) {
-        self.inner.remove_subscriber_by_id(id)
+            fn id(&self) -> ActorId {
+                self.get_id()
+            }
+        }
     }
 }
 
