@@ -24,8 +24,12 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 cluster = []
 monitors = []
 message_span_propogation = []
+<<<<<<< HEAD
 derived-actor-from-cell = []
 statistics = []
+=======
+output-port-v2 = []
+>>>>>>> origin/new-output-port
 tokio_runtime = ["tokio/time", "tokio/rt", "tokio/macros", "tokio/tracing"]
 blanket_serde = ["serde", "pot", "cluster"]
 async-trait = ["dep:async-trait"]
