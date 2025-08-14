@@ -47,15 +47,12 @@ jobs:
           - name: Test ractor with the monitor API
             package: ractor
             flags: -F monitors
-<<<<<<< HEAD
-=======
           - name: Test ractor with output-port-v2 feature
             package: ractor
             flags: -F output-port-v2
           - name: Test ractor without output-port-v2 feature (explicit)
             package: ractor
             flags: --no-default-features -F tokio_runtime,message_span_propogation
->>>>>>> origin/new-output-port
 
     steps:
       - uses: actions/checkout@main

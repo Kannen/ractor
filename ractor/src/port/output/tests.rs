@@ -254,6 +254,7 @@ mod output_port_subscriber_tests {
     use crate::call_t;
     use crate::cast;
     use crate::Actor;
+    use crate::ActorId;
     use crate::ActorRef;
     use crate::RpcReplyPort;
 

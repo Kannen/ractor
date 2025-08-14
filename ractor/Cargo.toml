@@ -24,12 +24,9 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 cluster = []
 monitors = []
 message_span_propogation = []
-<<<<<<< HEAD
 derived-actor-from-cell = []
 statistics = []
-=======
 output-port-v2 = []
->>>>>>> origin/new-output-port
 tokio_runtime = ["tokio/time", "tokio/rt", "tokio/macros", "tokio/tracing"]
 blanket_serde = ["serde", "pot", "cluster"]
 async-trait = ["dep:async-trait"]
@@ -51,7 +48,10 @@ strum = { version = "0.26", features = ["derive"] }
 ## Configurable dependencies
 # Tracing feature requires --cfg=tokio_unstable
 # async-std feature 'unstable' is required for spawn_local: https://docs.rs/async-std/latest/async_std/task/fn.spawn_local.html
-async-std = { version = "1", features = ["attributes", "unstable"], optional = true }
+async-std = { version = "1", features = [
+    "attributes",
+    "unstable",
+], optional = true }
 async-trait = { version = "0.1", optional = true }
 tokio = { version = "1.30", features = ["sync"] }
 tracing = { version = "0.1", features = ["attributes"] }
