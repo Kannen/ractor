@@ -520,7 +520,7 @@ fn process_output_port_messages(c: &mut Criterion) {
                                 Actor::spawn(None, ReceivingActor { num_msgs: NUM_MSGS }, ())
                                     .await
                                     .expect("Failed to create test actor");
-                            output_port.subscribe(r, |v| Some(v));
+                            output_port.subscribe(r, Some);
                             handels.push(h);
                         }
                         let (_, handle) =

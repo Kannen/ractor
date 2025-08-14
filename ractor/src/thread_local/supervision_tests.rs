@@ -28,7 +28,10 @@ fn get_spawner() -> ThreadLocalActorSpawner {
 }
 
 #[crate::concurrency::test]
-#[tracing_test::traced_test]
+#[cfg_attr(
+    not(all(target_arch = "wasm32", target_os = "unknown")),
+    tracing_test::traced_test
+)]
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 async fn test_thread_local_child() {
     use crate::thread_local::ThreadLocalActor;
@@ -51,12 +54,13 @@ async fn test_thread_local_child() {
         ) -> Result<Self::State, ActorProcessingErr> {
             Ok(())
         }
-        async fn post_start(
+        async fn handle(
             &self,
             _this_actor: ActorRef<Self::Msg>,
+            _message: Self::Msg,
             _state: &mut Self::State,
         ) -> Result<(), ActorProcessingErr> {
-            panic!("Boom");
+            panic!("Boom")
         }
     }
 
@@ -113,6 +117,8 @@ async fn test_thread_local_child() {
     assert!(maybe_sup.is_some());
     assert_eq!(maybe_sup.map(|a| a.get_id()), Some(supervisor_ref.get_id()));
 
+    assert!(child_ref.send_message(()).is_ok());
+
     let (_, _) = tokio::join!(s_handle, c_handle);
 
     assert_eq!(child_ref.get_id().pid(), flag.load(Ordering::SeqCst));
@@ -122,7 +128,10 @@ async fn test_thread_local_child() {
 }
 
 #[crate::concurrency::test]
-#[tracing_test::traced_test]
+#[cfg_attr(
+    not(all(target_arch = "wasm32", target_os = "unknown")),
+    tracing_test::traced_test
+)]
 async fn test_thread_local_supervisor() {
     struct Child;
     #[derive(Default)]
@@ -207,7 +216,11 @@ async fn test_thread_local_supervisor() {
 }
 
 #[crate::concurrency::test]
-#[tracing_test::traced_test]
+#[cfg_attr(
+    not(all(target_arch = "wasm32", target_os = "unknown")),
+    tracing_test::traced_test
+)]
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 async fn test_thread_local_child_panic_handle() {
     #[derive(Default)]
     struct Child;
