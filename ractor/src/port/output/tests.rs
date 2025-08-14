@@ -247,8 +247,10 @@ async fn test_delivery() {
 }
 
 #[allow(unused_imports)]
+#[cfg(feature = "output-port-v2")]
 use output_port_subscriber_tests::*;
 
+#[cfg(feature = "output-port-v2")]
 mod output_port_subscriber_tests {
     use super::*;
     use crate::call_t;
