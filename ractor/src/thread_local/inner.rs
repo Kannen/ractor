@@ -87,6 +87,7 @@ impl ActorCell {
 }
 
 impl ActorProperties {
+    #[allow(clippy::type_complexity)]
     pub(crate) fn new_thread_local<TActor>(
         name: Option<ActorName>,
     ) -> (

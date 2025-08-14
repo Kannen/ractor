@@ -229,10 +229,8 @@ fn join_actors_to_group(
             false
         }
     });
-    if shall_clean_group {
-        if clean_up_group(sd, &group) {
-            clean_up_scope(monitor, &scope)
-        }
+    if shall_clean_group && clean_up_group(sd, &group) {
+        clean_up_scope(monitor, &scope)
     }
     let notif = GroupChangeMessage::Join(scope.to_owned(), group.clone(), actors);
     notify_listeners(&gd.listeners, &notif, &mut garbadge);
@@ -247,13 +245,13 @@ fn join_actors_to_scope(
     group: GroupName,
 ) {
     if let Some(gd) = sd.groups.get(&group).map(|r| (*r).clone()) {
-        join_actors_to_group(monitor, &sd, &gd, actors, scope, group)
+        join_actors_to_group(monitor, sd, &gd, actors, scope, group)
     } else {
         let gd = match sd.groups.entry(group.to_owned()) {
             Occupied(oent) => oent.get().clone(),
             Vacant(vent) => vent.insert(Arc::new(GroupData::default())).clone(),
         };
-        join_actors_to_group(monitor, &sd, &*gd, actors, scope, group)
+        join_actors_to_group(monitor, sd, &gd, actors, scope, group)
     }
 }
 
@@ -266,7 +264,7 @@ pub fn join_scoped(scope: ScopeName, group: GroupName, actors: Vec<ActorCell>) {
     let monitor = get_monitor();
 
     if let Some(sd) = monitor.scopes.get(&scope).map(|r| (*r).clone()) {
-        join_actors_to_scope(&monitor, &sd, actors, scope, group)
+        join_actors_to_scope(monitor, &sd, actors, scope, group)
     } else {
         let sd = match monitor.scopes.entry(scope.to_owned()) {
             Occupied(oent) => oent.get().clone(),
@@ -332,7 +330,7 @@ fn leave_actors_from_scope(
     group: GroupName,
 ) {
     if let Some(gd) = sd.groups.get(&group).map(|r| (*r).clone()) {
-        leave_actors_from_group(monitor, &sd, &gd, actors, scope, group.clone())
+        leave_actors_from_group(monitor, sd, &gd, actors, scope, group.clone())
     }
 }
 
@@ -353,7 +351,7 @@ pub fn leave_scoped(scope: ScopeName, group: GroupName, actors: Vec<ActorCell>) 
     let monitor = get_monitor();
 
     if let Some(sd) = monitor.scopes.get(&scope).map(|r| (*r).clone()) {
-        leave_actors_from_scope(&monitor, &sd, actors, scope.clone(), group);
+        leave_actors_from_scope(monitor, &sd, actors, scope.clone(), group);
     }
 }
 
@@ -457,13 +455,14 @@ where
 ///
 /// Returns a [`Vec<GroupName>`] representing all the registered group names
 pub fn which_groups() -> Vec<GroupName> {
-    let Some(mut groups) = which_scopes()
-        .iter()
-        .map(|scope| which_scoped_groups(scope))
-        .reduce(|mut collected, gs| {
-            collected.extend(gs);
-            collected
-        })
+    let Some(mut groups) =
+        which_scopes()
+            .iter()
+            .map(which_scoped_groups)
+            .reduce(|mut collected, gs| {
+                collected.extend(gs);
+                collected
+            })
     else {
         return Vec::new();
     };

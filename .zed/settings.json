@@ -1,0 +1,29 @@
+{
+  "lsp": {
+    "rust-analyzer": {
+      "initialization_options": {
+        "check": {
+          "command": "clippy",
+          "extraArgs": ["--", "-D", "clippy::all", "-D", "warnings"]
+        },
+        "checkOnSave": {
+          "enable": true,
+          "command": "clippy",
+          "extraArgs": ["--", "-D", "clippy::all", "-D", "warnings"]
+        },
+        "diagnostics": {
+          "enable": true,
+          "experimental": {
+            "enable": true
+          }
+        },
+        "procMacro": {
+          "enable": true
+        }
+      }
+    }
+  },
+  "diagnostics": {
+    "include_warnings": true
+  }
+}

@@ -940,8 +940,14 @@ impl Actor for NodeSession {
         _state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         // unhook monitoring sessions
-        ractor::pg::demonitor_scope(ractor::pg::ALL_SCOPES_NOTIFICATION, myself.get_id());
-        ractor::pg::demonitor(ractor::pg::ALL_GROUPS_NOTIFICATION, myself.get_id());
+        ractor::pg::demonitor_scope(
+            ractor::pg::ALL_SCOPES_NOTIFICATION.to_string(),
+            myself.get_id(),
+        );
+        ractor::pg::demonitor(
+            ractor::pg::ALL_GROUPS_NOTIFICATION.to_string(),
+            myself.get_id(),
+        );
         ractor::registry::pid_registry::demonitor(myself.get_id());
 
         Ok(())

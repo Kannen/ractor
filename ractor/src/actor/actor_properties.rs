@@ -68,12 +68,11 @@ impl<T: Any + Send> GenericInputPort for InputPort<MuxedMessage<T>> {
             msg: LocalOrSerialized::Serialized(message),
             span: None,
         };
-        Ok(self
-            .send(MuxedMessage::Message(boxed))
+        self.send(MuxedMessage::Message(boxed))
             .map_err(|e| match e.0 {
                 MuxedMessage::Message(m) => MessagingErr::SendErr(m.msg.into_serialized().unwrap()),
                 _ => panic!("Expected a boxed message but got a drain message"),
-            })?)
+            })
     }
 }
 
@@ -112,6 +111,7 @@ pub(crate) struct ActorProperties {
 }
 
 impl ActorProperties {
+    #[allow(clippy::type_complexity)]
     pub(crate) fn new<TActor: Actor>(
         name: Option<ActorName>,
     ) -> (
@@ -120,13 +120,11 @@ impl ActorProperties {
         OneshotReceiver<StopMessage>,
         InputPortReceiver<SupervisionEvent>,
         InputPortReceiver<MuxedMessage<TActor::Msg>>,
-    )
-    where
-        TActor: Actor,
-    {
+    ) {
         Self::new_remote::<TActor>(name, crate::actor::actor_id::get_new_local_id())
     }
 
+    #[allow(clippy::type_complexity)]
     pub(crate) fn new_remote<TActor: Actor>(
         name: Option<ActorName>,
         id: ActorId,
@@ -136,10 +134,7 @@ impl ActorProperties {
         OneshotReceiver<StopMessage>,
         InputPortReceiver<SupervisionEvent>,
         InputPortReceiver<MuxedMessage<TActor::Msg>>,
-    )
-    where
-        TActor: Actor,
-    {
+    ) {
         let (tx_signal, rx_signal) = mpsc::oneshot();
         let (tx_stop, rx_stop) = mpsc::oneshot();
         let (tx_supervision, rx_supervision) = mpsc::mpsc_unbounded();
@@ -266,7 +261,7 @@ impl ActorProperties {
             return false;
         };
         if let Some(v) = &mut *lk {
-            if !v.listened_scopes.iter().any(|s| *s == scope) {
+            if !v.listened_scopes.contains(&scope) {
                 v.listened_scopes.push(scope)
             }
             true
