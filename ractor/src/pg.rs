@@ -96,8 +96,22 @@
 //! # Ok(())
 //! # }
 //! ```
+//! 
+//! ### Consistency
+//! 
+//! With the feature `pg-fence`, it is guaranteed that if a `monitor` is set up on a scope, world or group,
+//! then a call is made to a `get` of the world, this scope or this group, the ensemble of actors collected
+//! by the monitor and the get contain all agents in the world, scope or group.
+//! 
+//! For example, without this feature if in thread A, `monitor("A group", my_self); v = get_members("A Group")` is
+//! called, the actor handles supervisor events to add to `v` all actors that join "A group", and if in the meantime
+//! on thread B is called `join("A group", actor_cell2)`, it is not guaranteed that `v` will ever contain `actor_cell2`.
 
 use std::borrow::Borrow;
+#[cfg(feature = "pg-fence")]
+use std::sync::atomic::AtomicU32;
+#[cfg(feature = "pg-fence")]
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use dashmap::mapref::entry::Entry::Occupied;
@@ -231,17 +245,23 @@ impl ScopeGroupKey {
 #[derive(Default)]
 struct ScopeData {
     listeners: DashSet<ActorCell>,
+    #[cfg(feature = "pg-fence")]
+    fence: AtomicU32,
     groups: DashMap<GroupName, Arc<GroupData>>,
 }
 
 #[derive(Default)]
 struct GroupData {
     listeners: DashSet<ActorCell>,
+    #[cfg(feature = "pg-fence")]
+    fence: AtomicU32,
     members: DashSet<ActorCell>,
 }
 
 struct PgState {
     world_listeners: Arc<DashSet<ActorCell>>,
+    #[cfg(feature = "pg-fence")]
+    fence: AtomicU32,
     scopes: Arc<DashMap<ScopeName, Arc<ScopeData>>>,
 }
 
@@ -250,6 +270,8 @@ static PG_MONITOR: OnceCell<PgState> = OnceCell::new();
 fn get_monitor() -> &'static PgState {
     PG_MONITOR.get_or_init(|| PgState {
         world_listeners: Arc::new(DashSet::new()),
+        #[cfg(feature = "pg-fence")]
+        fence: AtomicU32::new(0),
         scopes: Arc::new(DashMap::new()),
     })
 }
@@ -341,6 +363,12 @@ fn join_actors_to_group(
     });
     if shall_clean_group && clean_up_group(sd, group) {
         clean_up_scope(monitor, scope)
+    }
+    #[cfg(feature = "pg-fence")]
+    {
+        monitor.fence.fetch_add(1, Ordering::Release);
+        sd.fence.fetch_add(1, Ordering::Release);
+        gd.fence.fetch_add(1, Ordering::Release);
     }
     let notif = GroupChangeMessage::Join(scope.to_owned(), group.to_owned(), actors);
     notify_listeners(&gd.listeners, &notif, &mut garbage);
@@ -466,6 +494,12 @@ fn leave_actors_from_group(
             false
         }
     });
+    #[cfg(feature = "pg-fence")]
+    {
+        monitor.fence.fetch_add(1, Ordering::Release);
+        sd.fence.fetch_add(1, Ordering::Release);
+        gd.fence.fetch_add(1, Ordering::Release);
+    }
     let notif = GroupChangeMessage::Leave(scope.to_owned(), group.to_owned(), actors);
     notify_listeners(&gd.listeners, &notif, &mut garbage);
     notify_listeners(&sd.listeners, &notif, &mut garbage);
@@ -1110,6 +1144,8 @@ fn add_listener_group(
 /// Returns true if the group may be cleaned up from the scope
 fn add_listener_to_group(sd: &ScopeData, actor: &ActorCell, scope: &str, group: &str) -> bool {
     if let Some(gd) = sd.groups.get(group).map(|r| (*r).clone()) {
+        #[cfg(feature = "pg-fence")]
+        gd.fence.fetch_add(1, Ordering::Acquire);
         if add_listener_group(&gd.listeners, actor, scope, group) {
             clean_up_group(sd, group)
         } else {
@@ -1120,6 +1156,8 @@ fn add_listener_to_group(sd: &ScopeData, actor: &ActorCell, scope: &str, group: 
             Occupied(oent) => oent.get().clone(),
             Vacant(vent) => vent.insert(Arc::new(GroupData::default())).clone(),
         };
+        #[cfg(feature = "pg-fence")]
+        gd.fence.fetch_add(1, Ordering::Acquire);
         if add_listener_group(&gd.listeners, actor, scope, group) {
             clean_up_group(sd, group)
         } else {
@@ -1307,6 +1345,8 @@ where
 /// Consider using more targeted monitoring with `monitor_scope` or `monitor_scoped`.
 pub fn monitor_world(actor: &ActorCell) {
     let monitor = get_monitor();
+    #[cfg(feature = "pg-fence")]
+    monitor.fence.fetch_add(1, Ordering::Acquire);
     monitor.world_listeners.insert(actor.clone());
     if !actor.can_monitor() {
         monitor.world_listeners.remove(actor);
@@ -1374,6 +1414,8 @@ where
         let monitor = get_monitor();
 
         if let Some(sd) = monitor.scopes.get(scope_str).map(|r| (*r).clone()) {
+            #[cfg(feature = "pg-fence")]
+            sd.fence.fetch_add(1, Ordering::Acquire);
             if add_listener_scope(&sd.listeners, &actor, scope_str) {
                 clean_up_scope(monitor, scope_str)
             }
@@ -1382,6 +1424,8 @@ where
                 Occupied(oent) => oent.get().clone(),
                 Vacant(vent) => vent.insert(Arc::new(ScopeData::default())).clone(),
             };
+            #[cfg(feature = "pg-fence")]
+            sd.fence.fetch_add(1, Ordering::Acquire);
             if add_listener_scope(&sd.listeners, &actor, scope_str) {
                 clean_up_scope(monitor, scope_str)
             }

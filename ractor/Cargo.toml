@@ -27,6 +27,7 @@ message_span_propogation = []
 derived-actor-from-cell = []
 statistics = []
 output-port-v2 = []
+pg-fence = []
 tokio_runtime = ["tokio/time", "tokio/rt", "tokio/macros", "tokio/tracing"]
 blanket_serde = ["serde", "pot", "cluster"]
 async-trait = ["dep:async-trait"]
@@ -36,6 +37,7 @@ default = [
     "message_span_propogation",
     "derived-actor-from-cell",
     "output-port-v2",
+    "pg-fence",
 ]
 
 [dependencies]
